@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grab and Throw - Knowledge Arena</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- MediaPipe Hands & Camera Utils CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <!-- FontAwesome icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;700&display=swap');
+        
+        * {
+            font-family: 'Fredoka', cursive, sans-serif;
+            user-select: none;
+        }
+
+        /* Mirror video view so controls feel natural */
+        #webcam {
+            transform: scaleX(-1);
+        }
+
+        .neon-text-cyan {
+            text-shadow: 0 0 10px #00f3ff, 0 0 20px #00f3ff, 0 0 30px #00f3ff;
+        }
+
+        .neon-text-pink {
+            text-shadow: 0 0 10px #ff007f, 0 0 20px #ff007f;
+        }
+
+        .neon-box {
+            box-shadow: 0 0 15px rgba(0, 243, 255, 0.4), inset 0 0 15px rgba(0, 243, 255, 0.2);
+        }
+
+        .animated-bg {
+            background: linear-gradient(135deg, #0f172a, #1e1b4b, #311042);
+        }
+
+        /* Pulse animation for hand pinch status */
+        @keyframes pulse-ring {
+            0% { transform: scale(0.95); opacity: 0.8; }
+            50% { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(0.95); opacity: 0.8; }
+        }
+        .pinch-active {
+            animation: pulse-ring 0.6s infinite ease-in-out;
+        }
+    </style>
+</head>
+<body class="animated-bg min-h-screen text-white overflow-hidden flex flex-col justify-center items-center relative">
+
+    <!-- Start Screen Overlay -->
+    <div id="start-screen" class="absolute inset-0 z-50 flex flex-col items-center justify-center bg-slate-900/90 backdrop-blur-md p-6 text-center">
+        <div class="max-w-xl w-full bg-slate-800/80 p-8 rounded-3xl border-4 border-cyan-400 neon-box flex flex-col items-center gap-6">
+            <div class="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 via-pink-500 to-cyan-400 tracking-wider">
+                GRAB & THROW
+            </div>
+            <div class="text-xl font-bold text-cyan-300 tracking-widest uppercase">Knowledge Arena: Animals Edition</div>
+            
+            <div class="bg-slate-900/70 p-4 rounded-2xl text-left text-slate-200 text-sm space-y-2 border border-slate-700 w-full">
+                <p class="font-bold text-yellow-400 text-base mb-1"><i class="fa-solid fa-gamepad mr-2"></i>Cara Bermain:</p>
+                <p><i class="fa-solid fa-hand-pointer text-cyan-400 w-6"></i> 1. Benarkan akses Webcam anda.</p>
+                <p><i class="fa-solid fa-hand-back-fist text-pink-400 w-6"></i> 2. <b>Pinch</b> (temukan ibu jari & jari telunjuk) untuk memegang bola jawapan.</p>
+                <p><i class="fa-solid fa-bullseye text-green-400 w-6"></i> 3. Tarik & <b>lepaskan pinch</b> untuk membaling bola ke target sasaran!</p>
+            </div>
+
+            <button id="btn-start" class="w-full py-4 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-2xl rounded-2xl shadow-lg transition-all transform hover:scale-105 active:scale-95 border-2 border-white/20 flex items-center justify-center gap-3">
+                <i class="fa-solid fa-play"></i> MULA PERMAINAN
+            </button>
+            <p id="loading-text" class="hidden text-yellow-400 animate-pulse text-sm font-semibold">
+                <i class="fa-solid fa-circle-notch fa-spin mr-2"></i> Memuatkan AI Pengesan Tangan...
+            </p>
+        </div>
+    </div>
+
+    <!-- Game Over Screen Overlay -->
+    <div id="game-over-screen" class="hidden absolute inset-0 z-50 flex flex-col items-center justify-center bg-slate-950/95 backdrop-blur-lg p-6 text-center">
+        <div class="max-w-md w-full bg-slate-900 p-8 rounded-3xl border-4 border-pink-500 neon-box flex flex-col items-center gap-6">
+            <h1 id="game-over-title" class="text-4xl font-extrabold text-pink-500 tracking-wide">GAME OVER</h1>
+            
+            <div class="w-full bg-slate-800 p-4 rounded-2xl border border-slate-700">
+                <p class="text-slate-400 text-sm">JUMLAH SKOR</p>
+                <p id="final-score" class="text-5xl font-black text-yellow-400 mt-1">0</p>
+            </div>
+
+            <button id="btn-restart" class="w-full py-4 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-400 hover:to-emerald-500 text-white font-bold text-xl rounded-2xl shadow-lg transition-all transform hover:scale-105 active:scale-95 border-2 border-white/20 flex items-center justify-center gap-2">
+                <i class="fa-solid fa-rotate-right"></i> MAIN SEMULA
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Game Container -->
+    <div class="relative w-full max-w-5xl h-[90vh] flex flex-col justify-between items-center p-4">
+        
+        <!-- HUD Overlay Header -->
+        <div class="w-full flex justify-between items-center bg-slate-900/80 backdrop-blur-md p-4 rounded-2xl border border-cyan-500/30 z-20 shadow-xl">
+            <!-- Lives -->
+            <div class="flex items-center gap-2">
+                <span class="text-slate-400 text-sm font-bold uppercase tracking-wider hidden sm:inline">Lives:</span>
+                <div id="lives-container" class="flex gap-1 text-2xl text-pink-500">
+                    <i class="fa-solid fa-heart"></i>
+                    <i class="fa-solid fa-heart"></i>
+                    <i class="fa-solid fa-heart"></i>
+                </div>
+            </div>
+
+            <!-- Question Progress -->
+            <div class="text-center">
+                <span id="question-number" class="text-cyan-400 font-extrabold text-lg sm:text-xl">SOALAN 1/10</span>
+            </div>
+
+            <!-- Timer & Score -->
+            <div class="flex items-center gap-4">
+                <div class="flex items-center gap-1 bg-slate-800 px-3 py-1.5 rounded-xl border border-yellow-500/40">
+                    <i class="fa-solid fa-clock text-yellow-400"></i>
+                    <span id="timer" class="font-black text-xl text-yellow-300">20</span>s
+                </div>
+                <div class="flex items-center gap-1 bg-slate-800 px-3 py-1.5 rounded-xl border border-cyan-500/40">
+                    <i class="fa-solid fa-star text-cyan-400"></i>
+                    <span id="score" class="font-black text-xl text-cyan-300">0</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Canvas Area (Interactive Game Arena) -->
+        <div class="relative w-full flex-1 my-3 rounded-3xl overflow-hidden border-4 border-slate-700 shadow-2xl bg-black">
+            <!-- Hidden Video element for webcam feed -->
+            <video id="webcam" class="absolute inset-0 w-full h-full object-cover hidden" playsinline></video>
+            <!-- Render Canvas -->
+            <canvas id="game-canvas" class="absolute inset-0 w-full h-full object-cover"></canvas>
+            
+            <!-- Gesture Pinch Status Badge -->
+            <div id="pinch-badge" class="absolute top-4 left-4 bg-slate-900/80 px-4 py-2 rounded-full border border-slate-700 flex items-center gap-2 text-xs font-bold text-slate-300 z-10">
+                <div id="pinch-dot" class="w-3 h-3 rounded-full bg-gray-500"></div>
+                <span id="pinch-status-text">MENUNGGU TANGAN...</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Web Audio API Synthesizer Script -->
+    <script>
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        let audioCtx = null;
+
+        function initAudio() {
+            if (!audioCtx) audioCtx = new AudioContext();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+        }
+
+        function playSound(type) {
+            if (!audioCtx) return;
+            const now = audioCtx.currentTime;
+
+            if (type === 'grab') {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(300, now);
+                osc.frequency.exponentialRampToValueAtTime(600, now + 0.08);
+                gain.gain.setValueAtTime(0.3, now);
+                gain.gain.linearRampToValueAtTime(0.01, now + 0.08);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start(now);
+                osc.stop(now + 0.08);
+            } else if (type === 'throw') {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(400, now);
+                osc.frequency.exponentialRampToValueAtTime(150, now + 0.15);
+                gain.gain.setValueAtTime(0.4, now);
+                gain.gain.linearRampToValueAtTime(0.01, now + 0.15);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start(now);
+                osc.stop(now + 0.15);
+            } else if (type === 'correct') {
+                [523.25, 659.25, 783.99, 1046.50].forEach((freq, i) => {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(freq, now + i * 0.06);
+                    gain.gain.setValueAtTime(0.2, now + i * 0.06);
+                    gain.gain.linearRampToValueAtTime(0.01, now + i * 0.06 + 0.15);
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.start(now + i * 0.06);
+                    osc.stop(now + i * 0.06 + 0.15);
+                });
+            } else if (type === 'wrong') {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(180, now);
+                osc.frequency.linearRampToValueAtTime(110, now + 0.25);
+                gain.gain.setValueAtTime(0.3, now);
+                gain.gain.linearRampToValueAtTime(0.01, now + 0.25);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start(now);
+                osc.stop(now + 0.25);
+            } else if (type === 'win') {
+                [440, 554.37, 659.25, 880].forEach((freq, i) => {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(freq, now + i * 0.1);
+                    gain.gain.setValueAtTime(0.3, now + i * 0.1);
+                    gain.gain.linearRampToValueAtTime(0.01, now + i * 0.1 + 0.3);
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.start(now + i * 0.1);
+                    osc.stop(now + i * 0.1 + 0.3);
+                });
+            }
+        }
+    </script>
+
+    <!-- Main Game Logic & MediaPipe Pipeline -->
+    <script>
+        // Questions Data (Animals English - Grade 2)
+        const questionsData = [
+            { q: "Which animal can fly?", options: ["Eagle", "Elephant", "Frog"], answer: 0 },
+            { q: "Which animal lives in water and has sharp teeth?", options: ["Rabbit", "Shark", "Duck"], answer: 1 },
+            { q: "Which animal has a long trunk?", options: ["Lion", "Snake", "Elephant"], answer: 2 },
+            { q: "Which animal barks and guards the house?", options: ["Dog", "Cat", "Cow"], answer: 0 },
+            { q: "Which animal gives us milk and says 'Moo'?", options: ["Tiger", "Cow", "Monkey"], answer: 1 },
+            { q: "Which animal has no legs and slithers?", options: ["Frog", "Bird", "Snake"], answer: 2 },
+            { q: "Which animal loves bananas and climbs trees?", options: ["Monkey", "Bear", "Sheep"], answer: 0 },
+            { q: "Which animal is known as the King of the Jungle?", options: ["Zebra", "Lion", "Hippo"], answer: 1 },
+            { q: "Which animal hops and keeps its baby in a pouch?", options: ["Horse", "Giraffe", "Kangaroo"], answer: 2 },
+            { q: "Which animal produces honey?", options: ["Bee", "Ant", "Butterfly"], answer: 0 }
+        ];
+
+        // State variables
+        let currentQIndex = 0;
+        let score = 0;
+        let lives = 3;
+        let timerVal = 20;
+        let timerInterval = null;
+        let gameActive = false;
+
+        // Hand tracking positions
+        let handPoint = { x: 0, y: 0 };
+        let handPrevPoint = { x: 0, y: 0 };
+        let isPinching = false;
+        let wasPinching = false;
+        let handTrail = [];
+
+        // Dynamic Game Objects
+        let targetZone = { x: 0, y: 0, radius: 80 };
+        let answerBalls = [];
+        let particles = [];
+        let feedbackTexts = [];
+        let grabbedBall = null;
+
+        // Elements
+        const videoElement = document.getElementById('webcam');
+        const canvasElement = document.getElementById('game-canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const startScreen = document.getElementById('start-screen');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const btnStart = document.getElementById('btn-start');
+        const btnRestart = document.getElementById('btn-restart');
+        const loadingText = document.getElementById('loading-text');
+
+        // Resize Canvas to parent
+        function resizeCanvas() {
+            canvasElement.width = canvasElement.clientWidth;
+            canvasElement.height = canvasElement.clientHeight;
+            targetZone.x = canvasElement.width / 2;
+            targetZone.y = 110;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // Initialize Answer Balls layout
+        function setupQuestion(index) {
+            const q = questionsData[index];
+            document.getElementById('question-number').innerText = `SOALAN ${index + 1}/10`;
+            
+            const count = q.options.length;
+            const spacing = canvasElement.width / (count + 1);
+            const startY = canvasElement.height - 100;
+
+            answerBalls = q.options.map((text, i) => {
+                return {
+                    id: i,
+                    text: text,
+                    x: spacing * (i + 1),
+                    y: startY,
+                    initialX: spacing * (i + 1),
+                    initialY: startY,
+                    vx: 0,
+                    vy: 0,
+                    radius: 45,
+                    color: i === 0 ? '#ff007f' : (i === 1 ? '#00f3ff' : '#39ff14'),
+                    isThrown: false
+                };
+            });
+
+            grabbedBall = null;
+            resetTimer();
+        }
+
+        function resetTimer() {
+            clearInterval(timerInterval);
+            timerVal = 20;
+            document.getElementById('timer').innerText = timerVal;
+            timerInterval = setInterval(() => {
+                if (!gameActive) return;
+                timerVal--;
+                document.getElementById('timer').innerText = timerVal;
+                if (timerVal <= 0) {
+                    handleAnswer(-1); // Timeout penalty
+                }
+            }, 1000);
+        }
+
+        // Check if hand is grabbing a ball
+        function checkGrab() {
+            if (grabbedBall) return;
+            for (let ball of answerBalls) {
+                if (ball.isThrown) continue;
+                const dist = Math.hypot(handPoint.x - ball.x, handPoint.y - ball.y);
+                if (dist < ball.radius + 20) {
+                    grabbedBall = ball;
+                    playSound('grab');
+                    // Add burst effect on grab
+                    createParticles(ball.x, ball.y, ball.color, 8);
+                    break;
+                }
+            }
+        }
+
+        // Release ball with calculated throwing velocity
+        function releaseGrab() {
+            if (!grabbedBall) return;
+            
+            // Calculate throw velocity from trail movement
+            const vx = (handPoint.x - handPrevPoint.x) * 1.5;
+            const vy = (handPoint.y - handPrevPoint.y) * 1.5;
+
+            grabbedBall.vx = vx;
+            grabbedBall.vy = vy < -2 ? vy : -12; // Minimum upward trajectory boost
+            grabbedBall.isThrown = true;
+            
+            playSound('throw');
+            createParticles(grabbedBall.x, grabbedBall.y, '#ffffff', 10);
+            grabbedBall = null;
+        }
+
+        // Spawn visual burst particles
+        function createParticles(x, y, color, count = 15) {
+            for (let i = 0; i < count; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 6 + 2;
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: Math.cos(angle) * speed,
+                    vy: Math.sin(angle) * speed,
+                    color: color,
+                    life: 1.0,
+                    decay: Math.random() * 0.04 + 0.02
+                });
+            }
+        }
+
+        // Spawn Floating Text Feedback (Betul! / Salah!)
+        function createFeedback(text, color, x, y) {
+            feedbackTexts.push({
+                text: text,
+                color: color,
+                x: x,
+                y: y,
+                alpha: 1.0,
+                scale: 0.5
+            });
+        }
+
+        // Handle answer selection check
+        function handleAnswer(selectedIndex) {
+            const currentQ = questionsData[currentQIndex];
+
+            if (selectedIndex === currentQ.answer) {
+                playSound('correct');
+                score += 100 + timerVal * 5;
+                document.getElementById('score').innerText = score;
+                createFeedback("BETUL! +100", "#39ff14", targetZone.x, targetZone.y + 40);
+                createParticles(targetZone.x, targetZone.y, "#39ff14", 30);
+            } else {
+                playSound('wrong');
+                lives--;
+                updateLivesUI();
+                createFeedback("SALAH!", "#ff007f", targetZone.x, targetZone.y + 40);
+                createParticles(targetZone.x, targetZone.y, "#ff007f", 30);
+            }
+
+            // Move to next question or trigger Game Over
+            setTimeout(() => {
+                if (lives <= 0 || currentQIndex >= questionsData.length - 1) {
+                    endGame();
+                } else {
+                    currentQIndex++;
+                    setupQuestion(currentQIndex);
+                }
+            }, 1200);
+        }
+
+        function updateLivesUI() {
+            const container = document.getElementById('lives-container');
+            let html = '';
+            for (let i = 0; i < 3; i++) {
+                if (i < lives) {
+                    html += '<i class="fa-solid fa-heart"></i>';
+                } else {
+                    html += '<i class="fa-regular fa-heart opacity-30"></i>';
+                }
+            }
+            container.innerHTML = html;
+        }
+
+        // End Game logic
+        function endGame() {
+            gameActive = false;
+            clearInterval(timerInterval);
+            
+            const title = document.getElementById('game-over-title');
+            if (lives > 0) {
+                title.innerText = "TAHNIAH! ANDA MENANG!";
+                title.className = "text-4xl font-extrabold text-cyan-400 tracking-wide";
+                playSound('win');
+            } else {
+                title.innerText = "GAME OVER";
+                title.className = "text-4xl font-extrabold text-pink-500 tracking-wide";
+            }
+
+            document.getElementById('final-score').innerText = score;
+            gameOverScreen.classList.remove('hidden');
+        }
+
+        // MediaPipe Hands Detection Callback
+        function onResults(results) {
+            // Draw Mirrored Video Frame onto Canvas
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.translate(canvasElement.width, 0);
+            canvasCtx.scale(-1, 1);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.restore();
+
+            // Darken video slightly for better graphics contrast
+            canvasCtx.fillStyle = 'rgba(15, 23, 42, 0.55)';
+            canvasCtx.fillRect(0, 0, canvasElement.width, canvasElement.height);
+
+            const badgeDot = document.getElementById('pinch-dot');
+            const badgeText = document.getElementById('pinch-status-text');
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+
+                // Landmark 4: Thumb Tip, Landmark 8: Index Tip
+                const thumb = landmarks[4];
+                const indexLandmark = landmarks[8];
+
+                // Screen coordinates (Mirrored X)
+                handPrevPoint = { ...handPoint };
+                handPoint.x = (1 - (thumb.x + indexLandmark.x) / 2) * canvasElement.width;
+                handPoint.y = ((thumb.y + indexLandmark.y) / 2) * canvasElement.height;
+
+                // Track hand trail
+                handTrail.push({ x: handPoint.x, y: handPoint.y, time: Date.now() });
+                if (handTrail.length > 12) handTrail.shift();
+
+                // Calculate 3D Pinch Distance
+                const dx = thumb.x - indexLandmark.x;
+                const dy = thumb.y - indexLandmark.y;
+                const dz = thumb.z - indexLandmark.z;
+                const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+                // Pinch distance threshold check (~0.05)
+                isPinching = distance < 0.055;
+
+                // Gesture change events
+                if (isPinching && !wasPinching) {
+                    checkGrab();
+                } else if (!isPinching && wasPinching) {
+                    releaseGrab();
+                }
+                wasPinching = isPinching;
+
+                // Update UI Pinch status badge
+                if (isPinching) {
+                    badgeDot.className = "w-3 h-3 rounded-full bg-green-400 pinch-active";
+                    badgeText.innerText = grabbedBall ? "MEMEGANG BOLA! (GRAB)" : "PINCH DETECTED";
+                    badgeText.className = "text-green-400 font-bold";
+                } else {
+                    badgeDot.className = "w-3 h-3 rounded-full bg-cyan-400";
+                    badgeText.innerText = "TANGAN DIKESAN";
+                    badgeText.className = "text-cyan-300 font-bold";
+                }
+
+                // Draw Hand Landmark Indicator
+                drawHandCursor(handPoint.x, handPoint.y, isPinching);
+
+            } else {
+                badgeDot.className = "w-3 h-3 rounded-full bg-gray-500";
+                badgeText.innerText = "CARI TANGAN ANDA...";
+                badgeText.className = "text-slate-400 font-normal";
+                isPinching = false;
+                wasPinching = false;
+                if (grabbedBall) releaseGrab();
+            }
+
+            // Render Game Loop Elements
+            if (gameActive) {
+                renderGameObjects();
+            }
+        }
+
+        // Visual Cursor for Hand Tracker
+        function drawHandCursor(x, y, pinching) {
+            // Motion Trail effect
+            if (handTrail.length > 1) {
+                canvasCtx.beginPath();
+                canvasCtx.moveTo(handTrail[0].x, handTrail[0].y);
+                for (let i = 1; i < handTrail.length; i++) {
+                    canvasCtx.lineTo(handTrail[i].x, handTrail[i].y);
+                }
+                canvasCtx.strokeStyle = pinching ? 'rgba(57, 255, 20, 0.6)' : 'rgba(0, 243, 255, 0.4)';
+                canvasCtx.lineWidth = 6;
+                canvasCtx.lineCap = 'round';
+                canvasCtx.stroke();
+            }
+
+            // Outer Reticle
+            canvasCtx.beginPath();
+            canvasCtx.arc(x, y, pinching ? 18 : 28, 0, Math.PI * 2);
+            canvasCtx.strokeStyle = pinching ? '#39ff14' : '#00f3ff';
+            canvasCtx.lineWidth = 3;
+            canvasCtx.shadowColor = pinching ? '#39ff14' : '#00f3ff';
+            canvasCtx.shadowBlur = 12;
+            canvasCtx.stroke();
+            canvasCtx.shadowBlur = 0;
+
+            // Inner Core
+            canvasCtx.beginPath();
+            canvasCtx.arc(x, y, 6, 0, Math.PI * 2);
+            canvasCtx.fillStyle = '#ffffff';
+            canvasCtx.fill();
+        }
+
+        // Render targets, balls, particles, and update physics
+        function renderGameObjects() {
+            // 1. Draw Target Zone (Question Arena)
+            const currentQ = questionsData[currentQIndex];
+            
+            // Outer Glowing Target Circle
+            canvasCtx.beginPath();
+            canvasCtx.arc(targetZone.x, targetZone.y, targetZone.radius, 0, Math.PI * 2);
+            canvasCtx.fillStyle = 'rgba(30, 41, 59, 0.85)';
+            canvasCtx.fill();
+            canvasCtx.lineWidth = 4;
+            canvasCtx.strokeStyle = '#facc15';
+            canvasCtx.shadowColor = '#facc15';
+            canvasCtx.shadowBlur = 15;
+            canvasCtx.stroke();
+            canvasCtx.shadowBlur = 0;
+
+            // Question Box Title
+            canvasCtx.font = 'bold 22px Fredoka';
+            canvasCtx.fillStyle = '#ffffff';
+            canvasCtx.textAlign = 'center';
+            canvasCtx.textBaseline = 'middle';
+            
+            // Wrap question text if long
+            const maxW = canvasElement.width * 0.7;
+            canvasCtx.fillText(currentQ.q, canvasElement.width / 2, 35, maxW);
+
+            canvasCtx.font = 'bold 14px Fredoka';
+            canvasCtx.fillStyle = '#facc15';
+            canvasCtx.fillText("BALING BOLA JAWAAPN KE SINI!", targetZone.x, targetZone.y);
+
+            // 2. Update & Draw Answer Balls
+            answerBalls.forEach(ball => {
+                if (ball === grabbedBall) {
+                    // Ball follows pinched hand
+                    ball.x = handPoint.x;
+                    ball.y = handPoint.y;
+                } else if (ball.isThrown) {
+                    // Physics physics trajectory
+                    ball.x += ball.vx;
+                    ball.y += ball.vy;
+                    ball.vy += 0.4; // Gravity acceleration
+
+                    // Check collision with Target Zone
+                    const distToTarget = Math.hypot(ball.x - targetZone.x, ball.y - targetZone.y);
+                    if (distToTarget < targetZone.radius) {
+                        handleAnswer(ball.id);
+                        ball.isThrown = false;
+                        ball.x = -999; // Remove from view
+                    }
+
+                    // Reset if out of screen bounds
+                    if (ball.y > canvasElement.height + 100 || ball.x < -100 || ball.x > canvasElement.width + 100) {
+                        ball.isThrown = false;
+                        ball.x = ball.initialX;
+                        ball.y = ball.initialY;
+                    }
+                }
+
+                // Render Ball
+                canvasCtx.beginPath();
+                canvasCtx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+                canvasCtx.fillStyle = ball.color;
+                canvasCtx.shadowColor = ball.color;
+                canvasCtx.shadowBlur = 15;
+                canvasCtx.fill();
+                canvasCtx.lineWidth = 3;
+                canvasCtx.strokeStyle = '#ffffff';
+                canvasCtx.stroke();
+                canvasCtx.shadowBlur = 0;
+
+                // Render Ball Text Label
+                canvasCtx.font = 'bold 18px Fredoka';
+                canvasCtx.fillStyle = '#0f172a';
+                canvasCtx.textAlign = 'center';
+                canvasCtx.textBaseline = 'middle';
+                canvasCtx.fillText(ball.text, ball.x, ball.y);
+            });
+
+            // 3. Render Explosive Particles
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life -= p.decay;
+
+                if (p.life <= 0) {
+                    particles.splice(i, 1);
+                    continue;
+                }
+
+                canvasCtx.beginPath();
+                canvasCtx.arc(p.x, p.y, 4 * p.life, 0, Math.PI * 2);
+                canvasCtx.fillStyle = p.color;
+                canvasCtx.globalAlpha = p.life;
+                canvasCtx.fill();
+                canvasCtx.globalAlpha = 1.0;
+            }
+
+            // 4. Render Text Feedback Popups
+            for (let i = feedbackTexts.length - 1; i >= 0; i--) {
+                const fb = feedbackTexts[i];
+                fb.y -= 1.5;
+                fb.alpha -= 0.02;
+
+                if (fb.alpha <= 0) {
+                    feedbackTexts.splice(i, 1);
+                    continue;
+                }
+
+                canvasCtx.save();
+                canvasCtx.globalAlpha = fb.alpha;
+                canvasCtx.font = 'bold 36px Fredoka';
+                canvasCtx.fillStyle = fb.color;
+                canvasCtx.textAlign = 'center';
+                canvasCtx.shadowColor = '#000000';
+                canvasCtx.shadowBlur = 8;
+                canvasCtx.fillText(fb.text, fb.x, fb.y);
+                canvasCtx.restore();
+            }
+        }
+
+        // Initialize MediaPipe Hands Detector
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.65,
+            minTrackingConfidence: 0.65
+        });
+
+        hands.onResults(onResults);
+
+        // Webcam Setup
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({ image: videoElement });
+            },
+            width: 1280,
+            height: 720
+        });
+
+        // Start Button Event Listener
+        btnStart.addEventListener('click', () => {
+            initAudio();
+            loadingText.classList.remove('hidden');
+            btnStart.classList.add('opacity-50', 'pointer-events-none');
+
+            camera.start()
+                .then(() => {
+                    startScreen.classList.add('hidden');
+                    gameActive = true;
+                    score = 0;
+                    lives = 3;
+                    currentQIndex = 0;
+                    updateLivesUI();
+                    document.getElementById('score').innerText = score;
+                    setupQuestion(currentQIndex);
+                })
+                .catch(err => {
+                    alert("Gagal mengakses webcam. Sila benarkan akses kamera untuk bermain!");
+                    console.error(err);
+                    loadingText.classList.add('hidden');
+                    btnStart.classList.remove('opacity-50', 'pointer-events-none');
+                });
+        });
+
+        // Restart Button Event Listener
+        btnRestart.addEventListener('click', () => {
+            gameOverScreen.classList.add('hidden');
+            gameActive = true;
+            score = 0;
+            lives = 3;
+            currentQIndex = 0;
+            updateLivesUI();
+            document.getElementById('score').innerText = score;
+            setupQuestion(currentQIndex);
+        });
+    </script>
+</body>
+</html>
